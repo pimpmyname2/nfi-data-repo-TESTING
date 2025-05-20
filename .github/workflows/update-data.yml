@@ -1,0 +1,121 @@
+name: Update Historical Data From Exchanges
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: ["Update END_DATE Monthly"]
+    types:
+      - completed
+
+concurrency: 1
+
+jobs:
+
+  Download-Exchange-Data:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    timeout-minutes: 3000
+    strategy:
+      fail-fast: false
+      matrix:
+        exchange:
+          - binance
+          - kucoin
+        tradingmode:
+          - spot
+          - futures
+        exclude:
+          - exchange: kucoin
+            tradingmode: futures
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          lfs: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Prep Git
+        run: |
+          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git reset --hard HEAD
+          git status
+
+      - name: ${{ matrix.exchange }} ${{ matrix.tradingmode }} Backtesting Data Variables
+        id: exchange-tradingmode-dates
+        uses: falti/dotenv-action@v1.1.4
+        with:
+          log-variables: true
+          path:
+            backtesting-${{ matrix.exchange }}-${{ matrix.tradingmode }}.env
+
+      - name: Inject proxy config into binance JSON
+        if: matrix.exchange == 'binance'
+        env:
+          PROXY: ${{ secrets.FREQTRADE_PROXY }}
+        run: |
+          for file in binance-spot-usdt-static.json binance-futures-usdt-static.json; do
+            jq --arg proxy "$PROXY" \
+            '.exchange.ccxt_config = {
+              http_proxy: $proxy
+            }' "$file" > tmp.json && mv tmp.json "$file"
+          done
+
+      - name: Download ${{ matrix.exchange }} Data (${{ steps.exchange-tradingmode-dates.outputs.start_date }} - ${{ steps.exchange-tradingmode-dates.outputs.end_date }})
+        id: exchange-tradingmode-data-download
+        env:
+          START_DATE: ${{ steps.exchange-tradingmode-dates.outputs.start_date }}
+          END_DATE: ${{ steps.exchange-tradingmode-dates.outputs.end_date }}
+          EXCHANGE: ${{ matrix.exchange }}
+          TRADINGMODE: ${{ matrix.tradingmode }}
+          HTTP_PROXY: ${{ matrix.exchange == 'binance' && secrets.FREQTRADE_PROXY }}
+        run: |
+          if [ "${{ matrix.exchange }}" = "binance" ]; then
+            export HTTP_PROXY="${{ secrets.FREQTRADE_PROXY }}"
+            echo "Using proxy for Binance"
+          fi
+          docker compose run --rm download-data
+
+      - name: Fix File Ownership
+        run: |
+          sudo chown -R $(id -u):$(id -g) .
+
+      - name: Commit ${{ matrix.exchange }} ${{ matrix.tradingmode }} Changed Files
+        id: commit-exchange-changes
+        if: steps.exchange-tradingmode-data-download.outcome == 'success'
+        continue-on-error: true
+        run: |
+          git checkout -- binance-spot-usdt-static.json
+          git checkout -- binance-futures-usdt-static.json
+          git add ${{ matrix.exchange }}/*.feather
+          # Only add futures/*.feather if not KuCoin spot
+          if ! ([ "${{ matrix.exchange }}" = "kucoin" ] && [ "${{ matrix.tradingmode }}" = "spot" ]); then
+            git add ${{ matrix.exchange }}/futures/*.feather
+          fi
+          # Only commit if there are staged changes
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "Update ${{ matrix.exchange }} exchange ${{ matrix.tradingmode }} data from ${{ steps.exchange-tradingmode-dates.outputs.start_date }} to ${{ steps.exchange-tradingmode-dates.outputs.end_date }}"
+          fi
+
+      - name: Push changes with retry
+        if: steps.commit-exchange-changes.outcome == 'success'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git remote set-url origin https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git
+          for i in {1..10}; do
+            git push origin HEAD:${{ github.ref_name }} && break
+            echo "Push failed, retrying in 5 seconds..."
+            git diff
+            sleep 5
+            git fetch origin
+            git checkout -- binance-spot-usdt-static.json
+            git rebase origin/${{ github.ref_name }}
+          done
