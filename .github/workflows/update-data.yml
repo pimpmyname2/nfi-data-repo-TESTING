@@ -22,7 +22,7 @@ jobs:
         exchange:
           - binance
           - kucoin
-          - gateio
+          - bybit
         tradingmode:
           - spot
           - futures

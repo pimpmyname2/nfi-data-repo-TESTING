@@ -1,6 +1,6 @@
 {
     "exchange": {
-        "name": "gateio",
+        "name": "bybit",
         "pair_whitelist": [
             "BTC/USDT:USDT",
             "1CAT/USDT:USDT",
