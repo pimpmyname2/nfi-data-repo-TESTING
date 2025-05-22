@@ -1,0 +1,9 @@
+{
+    "exchange": {
+        "name": "gateio",
+        "pair_whitelist": [
+            "1INCH/USDT",
+            "AAVE/USDT"
+        ]
+    }
+}

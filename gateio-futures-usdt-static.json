@@ -1,0 +1,11 @@
+{
+    "exchange": {
+        "name": "gateio",
+        "pair_whitelist": [
+            "BTC/USDT:USDT",
+            "1CAT/USDT:USDT",
+            "1INCH/USDT:USDT",
+            "AAVE/USDT:USDT"
+        ]
+    }
+}
